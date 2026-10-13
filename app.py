@@ -1,4 +1,5 @@
 import base64
+import re
 import os
 
 import requests
@@ -85,6 +86,31 @@ MODEL_SUFFIX = {
 }
 
 
+# FLUX understands English only; Hebrew words are ignored, so "טניס" alone gives a tennis shoe.
+GLOSSARY = [
+    ("צמיד טניס", "diamond tennis bracelet, a thin flexible line bracelet of evenly set small round sparkling stones, fine jewelry worn on the wrist"),
+    ("צמידים", "bracelets, fine jewelry"),
+    ("צמיד", "bracelet, fine jewelry worn on the wrist"),
+    ("שרשרת", "necklace with a chain, fine jewelry worn around the neck"),
+    ("עגילים", "earrings, fine jewelry"),
+    ("עגיל", "earring, fine jewelry"),
+    ("טבעת", "ring, fine jewelry worn on a finger"),
+    ("חריטה", "with a delicate engraving"),
+    ("זהב", "gold"),
+    ("כסף", "silver"),
+    ("יד", "hand"),
+    ("צוואר", "neck"),
+    ("דוגמנית", "female model"),
+    ("דוגמן", "male model"),
+]
+
+
+def _expand(prompt):
+    for he, en in GLOSSARY:
+        prompt = re.sub(rf"(?<!\w){re.escape(he)}(?!\w)", en, prompt)
+    return prompt
+
+
 def _find_image_b64(body):
     if isinstance(body, dict):
         if isinstance(body.get("image"), str):
@@ -118,6 +144,9 @@ def generate():
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return jsonify(error="missing 'prompt'"), 400
+    prompt = _expand(prompt)
+    if "tennis bracelet" in prompt.lower() and "shoe" not in prompt.lower():
+        prompt += ", close-up of the jewelry, no shoes, no sports equipment"
     prompt += MODEL_SUFFIX.get(data.get("model") or "", "")
     try:
         w, h = (int(x) for x in str(data.get("size", "768x1344")).split("x"))
