@@ -61,12 +61,14 @@ img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
 <select name="size"><option value="768x1344">אנכי 768x1344</option>
 <option value="1024x1024">ריבוע 1024x1024</option>
 <option value="1344x768">אופקי 1344x768</option></select>
-<label style="display:block;margin:.6rem 0"><input type="checkbox" name="model" style="width:auto;margin-inline-end:.5rem">על דוגמן/ית – עור עם טקסטורה מציאותית</label>
+<select name="model"><option value="">ללא דוגמן/ית</option>
+<option value="soft" selected>על דוגמן/ית – עור טבעי ועדין</option>
+<option value="real">על דוגמן/ית – עור מציאותי מאוד</option></select>
 <button>צור תמונה</button></form><div id="out"></div>
 <script>
 document.getElementById('f').onsubmit=async e=>{
   e.preventDefault();const o=document.getElementById('out');o.textContent='...';
-  const d=Object.fromEntries(new FormData(e.target));d.model=e.target.model.checked;
+  const d=Object.fromEntries(new FormData(e.target));
   const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
   const j=await r.json();
   o.innerHTML=j.image?'<img src="data:image/jpeg;base64,'+j.image+'">':'<pre></pre>';
@@ -74,12 +76,13 @@ document.getElementById('f').onsubmit=async e=>{
 </script></body></html>"""
 
 
-MODEL_SUFFIX = (
-    ", real person wearing it, natural skin with visible pores, fine skin texture, "
-    "subtle imperfections and fine hairs, soft natural window light, "
-    "shot on 85mm lens f/2.8, shallow depth of field, professional fashion editorial photography, "
-    "photorealistic, not retouched, not plastic"
-)
+MODEL_SUFFIX = {
+    "soft": ", worn by an elegant model, natural healthy glowing skin, smooth and softly retouched, "
+            "soft diffused studio light, 85mm lens, shallow depth of field, "
+            "beauty and jewelry editorial photography",
+    "real": ", worn by a model, natural skin with subtle fine texture, soft window light, "
+            "85mm lens f/2.8, shallow depth of field, fashion editorial photography, photorealistic",
+}
 
 
 def _find_image_b64(body):
@@ -115,8 +118,7 @@ def generate():
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return jsonify(error="missing 'prompt'"), 400
-    if data.get("model"):
-        prompt += MODEL_SUFFIX
+    prompt += MODEL_SUFFIX.get(data.get("model") or "", "")
     try:
         w, h = (int(x) for x in str(data.get("size", "768x1344")).split("x"))
     except ValueError:
