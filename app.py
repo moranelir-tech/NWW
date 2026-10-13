@@ -137,14 +137,12 @@ document.getElementById('f').onsubmit=async e=>{
 </script></body></html>"""
 
 CATALOG_PROMPT = (
-    "Edit this product photo into a clean e-commerce catalog image. "
-    "Place the exact same product on a pure white seamless background (#FFFFFF), "
-    "centered, with a soft subtle natural shadow beneath it, even soft studio lighting. "
-    "Keep the product exactly as in the input image: same shape, proportions, colors, materials, "
-    "stones, engraving, text, clasp, chain links and every small detail. "
-    "Do not change, redesign, add, remove or reposition any part of the product. "
-    "Do not add any props, people, hands, text, logos or decorations."
+    "Product catalog photo: the exact same product from the input image on a pure white "
+    "seamless background, centered, soft subtle shadow, even studio light. "
+    "Keep the product identical: same shape, colors, stones, engraving, clasp and every small detail. "
+    "Do not change, add or remove anything. No props, hands, people, text or logos."
 )
+MAX_PROMPT = 800
 
 
 def _find_image_b64(body):
@@ -180,10 +178,10 @@ def generate():
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return jsonify(error="missing 'prompt'"), 400
-    prompt = _expand(prompt)
+    prompt = _expand(prompt)[:500]
     if "tennis bracelet" in prompt.lower() and "shoe" not in prompt.lower():
         prompt += ", close-up of the jewelry, no shoes, no sports equipment"
-    prompt += MODEL_SUFFIX.get(data.get("model") or "", "")
+    prompt = (prompt + MODEL_SUFFIX.get(data.get("model") or "", ""))[:MAX_PROMPT]
     try:
         w, h = (int(x) for x in str(data.get("size", "768x1344")).split("x"))
     except ValueError:
@@ -280,7 +278,8 @@ def catalog():
     prompt = CATALOG_PROMPT
     extra = (request.form.get("extra") or "").strip()
     if extra:
-        prompt += " Additional request from the user, apply only this: " + _expand(extra)
+        room = MAX_PROMPT - len(prompt) - len(" Also: ")
+        prompt += " Also: " + _expand(extra)[:max(room, 0)]
     errors = []
     for img in ([uri], uri, [b64], b64):
         try:
