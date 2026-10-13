@@ -69,28 +69,51 @@ GEN_PAGE = """<!doctype html>
 <html lang="he" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NWW - יצירת תמונה</title>
-<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
-textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
-img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
+<style>body{font-family:system-ui;max-width:720px;margin:2rem auto;padding:0 1rem}
+textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem;box-sizing:border-box}
+.row{display:flex;gap:.5rem}.row>*{flex:1}
+#out{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.8rem;margin-top:1rem}
+.card{border:1px solid #ddd;border-radius:8px;padding:.5rem}
+img{max-width:100%;border-radius:6px}.card button{padding:.4rem;font-size:.9rem}
+.err{white-space:pre-wrap;color:#b00}</style></head>
 <body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a> · <a href="/catalog">תמונת קטלוג</a></p>
-<form id="f"><textarea name="prompt" rows="4" required
- placeholder="באנגלית, כמו תיאור צילום: מה בתמונה, איפה, תאורה, עדשה. למשל: gold engraved bracelet on a woman's wrist, soft window light, macro shot"></textarea>
-<select name="gen_model">__GEN_OPTIONS__</select>
-<select name="size"><option value="768x1344">אנכי 768x1344</option>
+<form id="f"><select name="gen_model">__GEN_OPTIONS__</select>
+<textarea name="prompt" rows="5" required
+ placeholder="באנגלית, כמו תיאור צילום: מה בתמונה, איפה, תאורה, עדשה"></textarea>
+<textarea name="fix" rows="2" placeholder="תיקון (לא חובה): מה לשנות או לתקן, נוסף לתיאור. למשל: relaxed open hand, five fingers visible"></textarea>
+<div class="row"><select name="size"><option value="768x1344">אנכי 768x1344</option>
 <option value="1024x1024">ריבוע 1024x1024</option>
 <option value="1344x768">אופקי 1344x768</option></select>
+<input name="seed" type="number" value="0" min="0" title="seed"></div>
 <select name="model"><option value="">ללא דוגמן/ית</option>
-<option value="soft" selected>על דוגמן/ית – עור טבעי ועדין</option>
+<option value="soft">על דוגמן/ית – עור טבעי ועדין</option>
 <option value="real">על דוגמן/ית – עור מציאותי מאוד</option></select>
-<button>צור תמונה</button></form><div id="out"></div>
+<div class="row"><button type="button" id="one">צור תמונה</button>
+<button type="button" id="four">צור 4 וריאציות</button></div></form>
+<p style="color:#666;font-size:.9rem">לתיקון: לחץ "השתמש ב-seed" מתחת לתמונה, כתוב את התיקון בשדה התיקון ולחץ "צור תמונה". אותו seed שומר על קומפוזיציה דומה, אבל זו יצירה מחדש ולא עריכה מדויקת.</p>
+<div id="out"></div>
 <script>
-document.getElementById('f').onsubmit=async e=>{
-  e.preventDefault();const o=document.getElementById('out');o.textContent='...';
-  const d=Object.fromEntries(new FormData(e.target));
-  const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-  const j=await r.json();
-  o.innerHTML=j.image?'<img src="data:image/jpeg;base64,'+j.image+'">':'<pre></pre>';
-  if(!j.image)o.firstChild.textContent=j.error||JSON.stringify(j);};
+const f=document.getElementById('f'),out=document.getElementById('out');
+function payload(seed){
+  const d=Object.fromEntries(new FormData(f));
+  d.prompt=d.prompt+(d.fix?', '+d.fix:'');delete d.fix;d.seed=seed;return d;}
+async function gen(seed){
+  const card=document.createElement('div');card.className='card';card.textContent='...';
+  out.prepend(card);
+  try{
+    const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload(seed))});
+    const j=await r.json();
+    if(!j.image){card.innerHTML='<div class="err"></div>';card.firstChild.textContent=j.error||JSON.stringify(j);return;}
+    card.innerHTML='<img><div style="font-size:.85rem">seed '+seed+'</div><button type="button">השתמש ב-seed</button>';
+    card.querySelector('img').src='data:image/jpeg;base64,'+j.image;
+    card.querySelector('button').onclick=()=>{f.seed.value=seed;f.fix.focus();};
+  }catch(e){card.textContent=String(e);}
+}
+document.getElementById('one').onclick=()=>gen(parseInt(f.seed.value||0));
+document.getElementById('four').onclick=async()=>{
+  const base=parseInt(f.seed.value||0);
+  for(let i=0;i<4;i++){await gen(base+i);}
+};
 </script></body></html>"""
 
 
