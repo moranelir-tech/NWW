@@ -14,6 +14,15 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10MB uploads
 MODEL = os.environ.get("NVIDIA_MODEL", "deepseek-ai/deepseek-v4.1-flash")
 DEFAULT_PROMPT = "Describe this image."
 
+VISION_MODELS = {
+    "deepseek-ai/deepseek-v4.1-flash": {"label": "DeepSeek V4.1 Flash", "max_tokens": 2048, "extra": {}},
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {"label": "Nemotron 3 Nano Omni (חושב)", "max_tokens": 4096,
+        "extra": {"reasoning_budget": 1024}},
+    "meta/llama-3.2-90b-vision-instruct": {"label": "Llama 3.2 90B Vision", "max_tokens": 1024, "extra": {}},
+    "moonshotai/kimi-k3": {"label": "Kimi K3", "max_tokens": 4096, "extra": {}},
+}
+DEFAULT_VISION = "deepseek-ai/deepseek-v4.1-flash"
+
 _client = None
 
 
@@ -36,6 +45,7 @@ textarea,input,button{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
 pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem;border-radius:6px}</style></head>
 <body><h1>ניתוח תמונה</h1><p><a href="/create">יצירת תמונה</a> · <a href="/catalog">תמונת קטלוג</a></p>
 <form id="f"><input type="file" name="image" accept="image/*" required>
+<select name="model">__MODEL_OPTIONS__</select>
 <textarea name="prompt" rows="3" placeholder="מה לשאול על התמונה?"></textarea>
 <button>שלח</button></form><pre id="out"></pre>
 <script>
@@ -46,6 +56,10 @@ document.getElementById('f').onsubmit=async e=>{
 </script></body></html>"""
 
 
+GEN_MODELS = {
+    "black-forest-labs/flux.2-klein-4b": "FLUX.2 klein 4B",
+}
+GEN_BASE = "https://ai.api.nvidia.com/v1/genai/"
 GEN_URL = os.environ.get(
     "NVIDIA_IMAGE_URL",
     "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b",
@@ -61,6 +75,7 @@ img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
 <body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a> · <a href="/catalog">תמונת קטלוג</a></p>
 <form id="f"><textarea name="prompt" rows="4" required
  placeholder="באנגלית, כמו תיאור צילום: מה בתמונה, איפה, תאורה, עדשה. למשל: gold engraved bracelet on a woman's wrist, soft window light, macro shot"></textarea>
+<select name="gen_model">__GEN_OPTIONS__</select>
 <select name="size"><option value="768x1344">אנכי 768x1344</option>
 <option value="1024x1024">ריבוע 1024x1024</option>
 <option value="1344x768">אופקי 1344x768</option></select>
@@ -164,12 +179,16 @@ def _find_image_b64(body):
 
 @app.get("/")
 def index():
-    return PAGE
+    opts = "".join(
+        f'<option value="{k}">{v["label"]}</option>' for k, v in VISION_MODELS.items()
+    )
+    return PAGE.replace("__MODEL_OPTIONS__", opts)
 
 
 @app.get("/create")
 def create_page():
-    return GEN_PAGE
+    opts = "".join(f'<option value="{k}">{v}</option>' for k, v in GEN_MODELS.items())
+    return GEN_PAGE.replace("__GEN_OPTIONS__", opts)
 
 
 @app.post("/generate")
@@ -190,8 +209,11 @@ def generate():
     if not key:
         return jsonify(error="NVIDIA_API_KEY is not set"), 500
     try:
+        gm = data.get("gen_model") or next(iter(GEN_MODELS))
+        if gm not in GEN_MODELS:
+            return jsonify(error="unknown model"), 400
         resp = requests.post(
-            GEN_URL,
+            GEN_BASE + gm,
             headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
             json={"prompt": prompt, "width": w, "height": h,
                   "seed": int(data.get("seed", 0)), "steps": 4},
@@ -221,9 +243,13 @@ def analyze():
     prompt = (request.form.get("prompt") or DEFAULT_PROMPT).strip()
     mime = file.mimetype if (file.mimetype or "").startswith("image/") else "image/jpeg"
     b64 = base64.b64encode(file.read()).decode()
+    model = request.form.get("model") or DEFAULT_VISION
+    cfg = VISION_MODELS.get(model)
+    if cfg is None:
+        return jsonify(error="unknown model"), 400
     try:
         completion = get_client().chat.completions.create(
-            model=MODEL,
+            model=model,
             messages=[{
                 "role": "user",
                 "content": [
@@ -231,14 +257,16 @@ def analyze():
                     {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                 ],
             }],
-            temperature=1,
+            temperature=0.6,
             top_p=0.95,
-            max_tokens=2048,
+            max_tokens=cfg["max_tokens"],
             stream=False,
+            extra_body=cfg["extra"] or None,
         )
     except Exception as exc:  # noqa: BLE001
         return jsonify(error=str(exc)), 502
-    return jsonify(text=completion.choices[0].message.content)
+    msg = completion.choices[0].message
+    return jsonify(text=msg.content or getattr(msg, "reasoning_content", None) or "")
 
 
 @app.get("/catalog")
