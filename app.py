@@ -32,7 +32,7 @@ PAGE = """<!doctype html>
 <style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
 textarea,input,button{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
 pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem;border-radius:6px}</style></head>
-<body><h1>ניתוח תמונה</h1><p><a href="/create">יצירת תמונה</a></p>
+<body><h1>ניתוח תמונה</h1><p><a href="/create">יצירת תמונה</a> · <a href="/catalog">תמונת קטלוג</a></p>
 <form id="f"><input type="file" name="image" accept="image/*" required>
 <textarea name="prompt" rows="3" placeholder="מה לשאול על התמונה?"></textarea>
 <button>שלח</button></form><pre id="out"></pre>
@@ -56,7 +56,7 @@ GEN_PAGE = """<!doctype html>
 <style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
 textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
 img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
-<body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a></p>
+<body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a> · <a href="/catalog">תמונת קטלוג</a></p>
 <form id="f"><textarea name="prompt" rows="4" required
  placeholder="באנגלית, כמו תיאור צילום: מה בתמונה, איפה, תאורה, עדשה. למשל: gold engraved bracelet on a woman's wrist, soft window light, macro shot"></textarea>
 <select name="size"><option value="768x1344">אנכי 768x1344</option>
@@ -109,6 +109,40 @@ def _expand(prompt):
     for he, en in GLOSSARY:
         prompt = re.sub(rf"(?<!\w){re.escape(he)}(?!\w)", en, prompt)
     return prompt
+
+
+CAT_PAGE = """<!doctype html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NWW - תמונת קטלוג</title>
+<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
+textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
+img{max-width:100%;border-radius:6px;border:1px solid #ddd}pre{white-space:pre-wrap}</style></head>
+<body><h1>תמונת קטלוג על רקע לבן</h1><p><a href="/create">יצירת תמונה</a> · <a href="/">ניתוח תמונה</a></p>
+<form id="f"><input type="file" name="image" accept="image/*" required>
+<select name="size"><option value="1024x1024">ריבוע 1024x1024</option>
+<option value="832x1248">אנכי 832x1248</option>
+<option value="1248x832">אופקי 1248x832</option></select>
+<textarea name="extra" rows="2" placeholder="בקשות נוספות (לא חובה). בלי זה לא ישתנה כלום חוץ מהרקע"></textarea>
+<button>צור תמונת קטלוג</button></form><div id="out"></div>
+<script>
+document.getElementById('f').onsubmit=async e=>{
+  e.preventDefault();const o=document.getElementById('out');o.textContent='...';
+  const r=await fetch('/catalog',{method:'POST',body:new FormData(e.target)});
+  const j=await r.json();
+  o.innerHTML=j.image?'<img src="data:image/jpeg;base64,'+j.image+'">':'<pre></pre>';
+  if(!j.image)o.firstChild.textContent=j.error||JSON.stringify(j);};
+</script></body></html>"""
+
+CATALOG_PROMPT = (
+    "Edit this product photo into a clean e-commerce catalog image. "
+    "Place the exact same product on a pure white seamless background (#FFFFFF), "
+    "centered, with a soft subtle natural shadow beneath it, even soft studio lighting. "
+    "Keep the product exactly as in the input image: same shape, proportions, colors, materials, "
+    "stones, engraving, text, clasp, chain links and every small detail. "
+    "Do not change, redesign, add, remove or reposition any part of the product. "
+    "Do not add any props, people, hands, text, logos or decorations."
+)
 
 
 def _find_image_b64(body):
@@ -205,6 +239,52 @@ def analyze():
     except Exception as exc:  # noqa: BLE001
         return jsonify(error=str(exc)), 502
     return jsonify(text=completion.choices[0].message.content)
+
+
+@app.get("/catalog")
+def catalog_page():
+    return CAT_PAGE
+
+
+@app.post("/catalog")
+def catalog():
+    file = request.files.get("image")
+    if file is None:
+        return jsonify(error="missing 'image' file"), 400
+    key = os.environ.get("NVIDIA_API_KEY")
+    if not key:
+        return jsonify(error="NVIDIA_API_KEY is not set"), 500
+    try:
+        w, h = (int(x) for x in (request.form.get("size") or "1024x1024").split("x"))
+    except ValueError:
+        return jsonify(error="bad 'size'"), 400
+    mime = file.mimetype if (file.mimetype or "").startswith("image/") else "image/jpeg"
+    b64 = base64.b64encode(file.read()).decode()
+    prompt = CATALOG_PROMPT
+    extra = (request.form.get("extra") or "").strip()
+    if extra:
+        prompt += " Additional request from the user, apply only this: " + _expand(extra)
+    last_err = None
+    for img in (f"data:{mime};base64,{b64}", b64):
+        try:
+            resp = requests.post(
+                GEN_URL,
+                headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+                json={"prompt": prompt, "image": [img], "width": w, "height": h,
+                      "seed": 0, "steps": 4},
+                timeout=110,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return jsonify(error=str(exc)), 502
+        if resp.status_code < 400:
+            out = _find_image_b64(resp.json())
+            if out:
+                return jsonify(image=out)
+            return jsonify(error="no image in response", keys=list(resp.json())[:10]), 502
+        last_err = f"NVIDIA {resp.status_code}: {resp.text[:500]}"
+        if resp.status_code not in (400, 422):
+            break
+    return jsonify(error=last_err), 502
 
 
 if __name__ == "__main__":
