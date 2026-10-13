@@ -57,20 +57,29 @@ textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1
 img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
 <body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a></p>
 <form id="f"><textarea name="prompt" rows="4" required
- placeholder="תאר את התמונה (עדיף באנגלית)"></textarea>
+ placeholder="באנגלית, כמו תיאור צילום: מה בתמונה, איפה, תאורה, עדשה. למשל: gold engraved bracelet on a woman's wrist, soft window light, macro shot"></textarea>
 <select name="size"><option value="768x1344">אנכי 768x1344</option>
 <option value="1024x1024">ריבוע 1024x1024</option>
 <option value="1344x768">אופקי 1344x768</option></select>
+<label style="display:block;margin:.6rem 0"><input type="checkbox" name="model" style="width:auto;margin-inline-end:.5rem">על דוגמן/ית – עור עם טקסטורה מציאותית</label>
 <button>צור תמונה</button></form><div id="out"></div>
 <script>
 document.getElementById('f').onsubmit=async e=>{
   e.preventDefault();const o=document.getElementById('out');o.textContent='...';
-  const d=Object.fromEntries(new FormData(e.target));
+  const d=Object.fromEntries(new FormData(e.target));d.model=e.target.model.checked;
   const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
   const j=await r.json();
   o.innerHTML=j.image?'<img src="data:image/jpeg;base64,'+j.image+'">':'<pre></pre>';
   if(!j.image)o.firstChild.textContent=j.error||JSON.stringify(j);};
 </script></body></html>"""
+
+
+MODEL_SUFFIX = (
+    ", real person wearing it, natural skin with visible pores, fine skin texture, "
+    "subtle imperfections and fine hairs, soft natural window light, "
+    "shot on 85mm lens f/2.8, shallow depth of field, professional fashion editorial photography, "
+    "photorealistic, not retouched, not plastic"
+)
 
 
 def _find_image_b64(body):
@@ -106,6 +115,8 @@ def generate():
     prompt = (data.get("prompt") or "").strip()
     if not prompt:
         return jsonify(error="missing 'prompt'"), 400
+    if data.get("model"):
+        prompt += MODEL_SUFFIX
     try:
         w, h = (int(x) for x in str(data.get("size", "768x1344")).split("x"))
     except ValueError:
