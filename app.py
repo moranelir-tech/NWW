@@ -1,6 +1,7 @@
 import base64
 import os
 
+import requests
 from flask import Flask, jsonify, request
 from openai import OpenAI
 
@@ -30,7 +31,7 @@ PAGE = """<!doctype html>
 <style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
 textarea,input,button{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
 pre{white-space:pre-wrap;background:#f4f4f4;padding:1rem;border-radius:6px}</style></head>
-<body><h1>ניתוח תמונה</h1>
+<body><h1>ניתוח תמונה</h1><p><a href="/create">יצירת תמונה</a></p>
 <form id="f"><input type="file" name="image" accept="image/*" required>
 <textarea name="prompt" rows="3" placeholder="מה לשאול על התמונה?"></textarea>
 <button>שלח</button></form><pre id="out"></pre>
@@ -42,9 +43,93 @@ document.getElementById('f').onsubmit=async e=>{
 </script></body></html>"""
 
 
+GEN_URL = os.environ.get(
+    "NVIDIA_IMAGE_URL",
+    "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b",
+)
+
+GEN_PAGE = """<!doctype html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NWW - יצירת תמונה</title>
+<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}
+textarea,input,button,select{width:100%;margin:.4rem 0;padding:.6rem;font-size:1rem}
+img{max-width:100%;border-radius:6px}pre{white-space:pre-wrap}</style></head>
+<body><h1>יצירת תמונה</h1><p><a href="/">ניתוח תמונה</a></p>
+<form id="f"><textarea name="prompt" rows="4" required
+ placeholder="תאר את התמונה (עדיף באנגלית)"></textarea>
+<select name="size"><option value="768x1344">אנכי 768x1344</option>
+<option value="1024x1024">ריבוע 1024x1024</option>
+<option value="1344x768">אופקי 1344x768</option></select>
+<button>צור תמונה</button></form><div id="out"></div>
+<script>
+document.getElementById('f').onsubmit=async e=>{
+  e.preventDefault();const o=document.getElementById('out');o.textContent='...';
+  const d=Object.fromEntries(new FormData(e.target));
+  const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
+  const j=await r.json();
+  o.innerHTML=j.image?'<img src="data:image/jpeg;base64,'+j.image+'">':'<pre></pre>';
+  if(!j.image)o.firstChild.textContent=j.error||JSON.stringify(j);};
+</script></body></html>"""
+
+
+def _find_image_b64(body):
+    if isinstance(body, dict):
+        if isinstance(body.get("image"), str):
+            return body["image"]
+        for key in ("artifacts", "data", "images"):
+            items = body.get(key)
+            if isinstance(items, list) and items:
+                first = items[0]
+                if isinstance(first, str):
+                    return first
+                if isinstance(first, dict):
+                    for k in ("base64", "b64_json", "image"):
+                        if isinstance(first.get(k), str):
+                            return first[k]
+    return None
+
+
 @app.get("/")
 def index():
     return PAGE
+
+
+@app.get("/create")
+def create_page():
+    return GEN_PAGE
+
+
+@app.post("/generate")
+def generate():
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify(error="missing 'prompt'"), 400
+    try:
+        w, h = (int(x) for x in str(data.get("size", "768x1344")).split("x"))
+    except ValueError:
+        return jsonify(error="bad 'size', use WIDTHxHEIGHT"), 400
+    key = os.environ.get("NVIDIA_API_KEY")
+    if not key:
+        return jsonify(error="NVIDIA_API_KEY is not set"), 500
+    try:
+        resp = requests.post(
+            GEN_URL,
+            headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+            json={"prompt": prompt, "width": w, "height": h,
+                  "seed": int(data.get("seed", 0)), "steps": 4},
+            timeout=110,
+        )
+        if resp.status_code >= 400:
+            return jsonify(error=f"NVIDIA {resp.status_code}: {resp.text[:500]}"), 502
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return jsonify(error=str(exc)), 502
+    img = _find_image_b64(body)
+    if not img:
+        return jsonify(error="no image in response", keys=list(body)[:10]), 502
+    return jsonify(image=img)
 
 
 @app.get("/health")
