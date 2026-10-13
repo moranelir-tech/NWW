@@ -1,8 +1,10 @@
 import base64
+import io
 import re
 import os
 
 import requests
+from PIL import Image, ImageOps
 from flask import Flask, jsonify, request
 from openai import OpenAI
 
@@ -258,32 +260,49 @@ def catalog():
         w, h = (int(x) for x in (request.form.get("size") or "1024x1024").split("x"))
     except ValueError:
         return jsonify(error="bad 'size'"), 400
-    mime = file.mimetype if (file.mimetype or "").startswith("image/") else "image/jpeg"
-    b64 = base64.b64encode(file.read()).decode()
+    try:
+        im = Image.open(file.stream)
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ("RGBA", "LA", "P"):
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            im = im.convert("RGBA")
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        else:
+            im = im.convert("RGB")
+        im.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+    except Exception as exc:  # noqa: BLE001
+        return jsonify(error=f"cannot read image: {exc}"), 400
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    uri = f"data:image/png;base64,{b64}"
     prompt = CATALOG_PROMPT
     extra = (request.form.get("extra") or "").strip()
     if extra:
         prompt += " Additional request from the user, apply only this: " + _expand(extra)
-    last_err = None
-    for img in (f"data:{mime};base64,{b64}", b64):
+    errors = []
+    for img in ([uri], uri, [b64], b64):
         try:
             resp = requests.post(
                 GEN_URL,
                 headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
-                json={"prompt": prompt, "image": [img], "width": w, "height": h,
+                json={"prompt": prompt, "image": img, "width": w, "height": h,
                       "seed": 0, "steps": 4},
                 timeout=110,
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify(error=str(exc)), 502
         if resp.status_code < 400:
-            out = _find_image_b64(resp.json())
+            body = resp.json()
+            out = _find_image_b64(body)
             if out:
                 return jsonify(image=out)
-            return jsonify(error="no image in response", keys=list(resp.json())[:10]), 502
-        last_err = f"NVIDIA {resp.status_code}: {resp.text[:500]}"
+            return jsonify(error="no image in response", keys=list(body)[:10]), 502
+        errors.append(f"{type(img).__name__}: {resp.status_code} {resp.text[:200]}")
         if resp.status_code not in (400, 422):
             break
+    last_err = "NVIDIA rejected all image formats: " + " | ".join(errors)
     return jsonify(error=last_err), 502
 
 
